@@ -405,20 +405,27 @@ impl Game {
 
     /// Remove dead entities from the world
     fn remove_dead_entities(&mut self) {
-        let entities = self.world.entities();
-        let stats = self.world.read_storage::<Stats>();
+        // Collect dead entities first
+        let dead: Vec<Entity> = {
+            let entities = self.world.entities();
+            let stats = self.world.read_storage::<Stats>();
 
-        // Collect dead entities
-        let dead: Vec<Entity> = (&entities, &stats)
-            .join()
-            .filter(|(_, s)| !s.is_alive())
-            .map(|(e, _)| e)
-            .collect();
+            (&entities, &stats)
+                .join()
+                .filter(|(_, s)| !s.is_alive())
+                .map(|(e, _)| e)
+                .collect()
+        }; // Borrows are dropped here
 
-        // Delete dead entities
+        // Delete entities using world's delete_entity method
         for entity in dead {
-            let _ = entities.delete(entity);
+            if let Err(_) = self.world.delete_entity(entity) {
+                // Entity already deleted or invalid, ignore
+            }
         }
+
+        // Process deferred deletions
+        self.world.maintain();
     }
 
     /// Check if the game is over (all players or all enemies dead)
