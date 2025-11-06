@@ -16,37 +16,37 @@ use crate::components::*;
 use crate::level::Level;
 
 /// Render the main game screen
-pub fn render_game(f: &mut Frame, world: &World, current_actor: Option<Entity>) {
+pub fn render_game(f: &mut Frame, world: &World, current_actor: Option<Entity>, targeting_mode: bool, cursor_pos: Option<Position>) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Percentage(65), // Game area
-            Constraint::Percentage(30), // Status area
+            Constraint::Percentage(75), // Game area
+            Constraint::Percentage(20), // Status area
             Constraint::Length(3),      // Controls area
         ])
         .split(f.area());
 
-    render_level(f, chunks[0], world, current_actor);
+    render_level(f, chunks[0], world, current_actor, targeting_mode, cursor_pos);
     render_status(f, chunks[1], world, current_actor);
-    render_controls(f, chunks[2]);
+    render_controls(f, chunks[2], targeting_mode);
 }
 
 /// Render the game level
-fn render_level(f: &mut Frame, area: Rect, world: &World, current_actor: Option<Entity>) {
+fn render_level(f: &mut Frame, area: Rect, world: &World, current_actor: Option<Entity>, targeting_mode: bool, cursor_pos: Option<Position>) {
     // Get the level from the world
     let level = world.fetch::<Level>();
     let positions = world.read_storage::<Position>();
     let renderables = world.read_storage::<Renderable>();
     let entities = world.entities();
 
-    // Create a 2D grid to render with styling info
-    let mut grid: Vec<Vec<(char, bool)>> = vec![vec![(' ', false); level.width as usize]; level.height as usize];
+    // Create a 2D grid to render with styling info: (char, is_active_entity, is_cursor)
+    let mut grid: Vec<Vec<(char, bool, bool)>> = vec![vec![(' ', false, false); level.width as usize]; level.height as usize];
 
     // First, render the level tiles
     for y in 0..level.height {
         for x in 0..level.width {
             if let Some(tile) = level.get_tile(x, y) {
-                grid[y as usize][x as usize] = (tile.display_char(), false);
+                grid[y as usize][x as usize] = (tile.display_char(), false, false);
             }
         }
     }
@@ -55,7 +55,17 @@ fn render_level(f: &mut Frame, area: Rect, world: &World, current_actor: Option<
     for (entity, pos, renderable) in (&entities, &positions, &renderables).join() {
         if level.is_in_bounds(pos.x, pos.y) {
             let is_active = current_actor.map(|e| e == entity).unwrap_or(false);
-            grid[pos.y as usize][pos.x as usize] = (renderable.glyph, is_active);
+            grid[pos.y as usize][pos.x as usize] = (renderable.glyph, is_active, false);
+        }
+    }
+
+    // Render targeting cursor if in targeting mode
+    if targeting_mode {
+        if let Some(cursor) = cursor_pos {
+            if level.is_in_bounds(cursor.x, cursor.y) {
+                let (ch, is_active, _) = grid[cursor.y as usize][cursor.x as usize];
+                grid[cursor.y as usize][cursor.x as usize] = (ch, is_active, true);
+            }
         }
     }
 
@@ -63,8 +73,10 @@ fn render_level(f: &mut Frame, area: Rect, world: &World, current_actor: Option<
     let mut lines: Vec<Line> = Vec::new();
     for row in grid {
         let mut spans: Vec<Span> = Vec::new();
-        for (ch, is_active) in row {
-            let style = if is_active {
+        for (ch, is_active, is_cursor) in row {
+            let style = if is_cursor {
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+            } else if is_active {
                 Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD | Modifier::REVERSED)
             } else {
                 Style::default()
@@ -181,8 +193,14 @@ fn render_status(f: &mut Frame, area: Rect, world: &World, current_actor: Option
 }
 
 /// Render the controls area
-fn render_controls(f: &mut Frame, area: Rect) {
-    let controls = Paragraph::new("Controls: Arrow Keys/hjkl=Move/Attack | Space=Pass Turn | Q=Quit")
+fn render_controls(f: &mut Frame, area: Rect, targeting_mode: bool) {
+    let controls_text = if targeting_mode {
+        "TARGETING MODE: Arrow Keys/hjkl=Move Cursor | Enter=Attack Target | Esc=Cancel"
+    } else {
+        "Controls: Arrow Keys/hjkl=Move/Attack | R=Ranged Attack | Space=Pass Turn | Q=Quit"
+    };
+
+    let controls = Paragraph::new(controls_text)
         .style(Style::default().fg(Color::Cyan))
         .block(Block::default().borders(Borders::ALL));
     f.render_widget(controls, area);

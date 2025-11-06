@@ -26,6 +26,8 @@ pub struct Game {
     pub world: World,
     pub state: GameState,
     pub current_actor: Option<Entity>,
+    pub targeting_mode: bool,
+    pub cursor_position: Option<Position>,
 }
 
 impl Game {
@@ -37,6 +39,7 @@ impl Game {
         world.register::<Position>();
         world.register::<Stats>();
         world.register::<ActionPoints>();
+        world.register::<RemainingMovement>();
         world.register::<Adventurer>();
         world.register::<Enemy>();
         world.register::<PlayerControlled>();
@@ -49,13 +52,15 @@ impl Game {
             world,
             state: GameState::PartySelection,
             current_actor: None,
+            targeting_mode: false,
+            cursor_position: None,
         }
     }
 
     /// Start a new game with the selected party
     pub fn start_game(&mut self, selected_adventurers: Vec<AdventurerType>) {
-        // Generate level
-        let level = Level::generate_simple(60, 40);
+        // Generate level (wider for widescreen displays)
+        let level = Level::generate_simple(120, 30);
 
         // Find spawn positions
         let spawn_positions = level.find_random_positions(selected_adventurers.len() + 5);
@@ -71,6 +76,7 @@ impl Game {
                     .with(Position::new(x, y))
                     .with(Stats::new(health, speed, damage))
                     .with(ActionPoints::new(2))
+                    .with(RemainingMovement::new())
                     .with(Adventurer::new(*adventurer_type))
                     .with(PlayerControlled)
                     .with(Renderable::new(adventurer_type.display_char()))
@@ -95,6 +101,7 @@ impl Game {
                     .with(Position::new(x, y))
                     .with(Stats::new(health, speed, damage))
                     .with(ActionPoints::new(2))
+                    .with(RemainingMovement::new())
                     .with(Enemy::new(enemy_type))
                     .with(Renderable::new(enemy_type.display_char()))
                     .build();
@@ -163,10 +170,16 @@ impl Game {
                 return Ok(false);
             }
 
+            // If in targeting mode, handle targeting input
+            if self.targeting_mode {
+                return self.handle_targeting_input(key, current_entity);
+            }
+
             // Handle player movement and actions
             let mut dx = 0;
             let mut dy = 0;
             let mut pass = false;
+            let mut enter_targeting = false;
 
             match key.code {
                 KeyCode::Up | KeyCode::Char('k') => dy = -1,
@@ -174,16 +187,26 @@ impl Game {
                 KeyCode::Left | KeyCode::Char('h') => dx = -1,
                 KeyCode::Right | KeyCode::Char('l') => dx = 1,
                 KeyCode::Char(' ') => pass = true,
+                KeyCode::Char('r') | KeyCode::Char('R') => enter_targeting = true,
                 KeyCode::Char('q') => return Ok(true), // Quit
                 _ => return Ok(false),
+            }
+
+            // Enter targeting mode if requested
+            if enter_targeting {
+                return self.try_enter_targeting_mode(current_entity);
             }
 
             if pass {
                 // Pass turn
                 {
                     let mut action_points = self.world.write_storage::<ActionPoints>();
+                    let mut movement = self.world.write_storage::<RemainingMovement>();
                     if let Some(ap) = action_points.get_mut(current_entity) {
                         ap.current = 0; // Spend all action points
+                    }
+                    if let Some(mv) = movement.get_mut(current_entity) {
+                        mv.clear(); // Clear remaining movement
                     }
                 }
                 self.update_current_actor();
@@ -200,6 +223,7 @@ impl Game {
                         let mut stats = self.world.write_storage::<Stats>();
                         let mut action_points = self.world.write_storage::<ActionPoints>();
                         let positions = self.world.read_storage::<Position>();
+                        let adventurers = self.world.read_storage::<Adventurer>();
 
                         CombatSystem::process_attack(
                             current_entity,
@@ -207,6 +231,7 @@ impl Game {
                             &mut stats,
                             &mut action_points,
                             &positions,
+                            &adventurers,
                         )
                     };
 
@@ -221,6 +246,7 @@ impl Game {
                         let mut positions = self.world.write_storage::<Position>();
                         let mut action_points = self.world.write_storage::<ActionPoints>();
                         let stats = self.world.read_storage::<Stats>();
+                        let mut movement = self.world.write_storage::<RemainingMovement>();
 
                         MovementSystem::process_movement(
                             current_entity,
@@ -229,6 +255,7 @@ impl Game {
                             &mut positions,
                             &mut action_points,
                             &stats,
+                            &mut movement,
                             &self.world,
                         )
                     };
@@ -294,6 +321,7 @@ impl Game {
                 let mut stats = self.world.write_storage::<Stats>();
                 let mut action_points = self.world.write_storage::<ActionPoints>();
                 let positions = self.world.read_storage::<Position>();
+                let adventurers = self.world.read_storage::<Adventurer>();
 
                 CombatSystem::process_attack(
                     enemy_entity,
@@ -301,6 +329,7 @@ impl Game {
                     &mut stats,
                     &mut action_points,
                     &positions,
+                    &adventurers,
                 );
             } else {
                 // Move towards player
@@ -316,6 +345,7 @@ impl Game {
                 let mut positions_mut = self.world.write_storage::<Position>();
                 let mut action_points = self.world.write_storage::<ActionPoints>();
                 let stats = self.world.read_storage::<Stats>();
+                let mut movement = self.world.write_storage::<RemainingMovement>();
 
                 // Try to move in the direction of the player
                 if !MovementSystem::process_movement(
@@ -325,6 +355,7 @@ impl Game {
                     &mut positions_mut,
                     &mut action_points,
                     &stats,
+                    &mut movement,
                     &self.world,
                 ) {
                     // If that fails, try moving in just one direction
@@ -336,6 +367,7 @@ impl Game {
                             &mut positions_mut,
                             &mut action_points,
                             &stats,
+                            &mut movement,
                             &self.world,
                         );
                     } else if dy != 0 {
@@ -346,6 +378,7 @@ impl Game {
                             &mut positions_mut,
                             &mut action_points,
                             &stats,
+                            &mut movement,
                             &self.world,
                         );
                     }
@@ -353,11 +386,15 @@ impl Game {
             }
         }
 
-        // Spend remaining action points
+        // Spend remaining action points and clear movement
         {
             let mut action_points = self.world.write_storage::<ActionPoints>();
+            let mut movement = self.world.write_storage::<RemainingMovement>();
             if let Some(ap) = action_points.get_mut(enemy_entity) {
                 ap.current = 0;
+            }
+            if let Some(mv) = movement.get_mut(enemy_entity) {
+                mv.clear();
             }
         }
 
@@ -403,6 +440,133 @@ impl Game {
                 break;
             }
         }
+    }
+
+    /// Try to enter targeting mode for ranged attacks
+    fn try_enter_targeting_mode(&mut self, entity: Entity) -> Result<bool> {
+        // Check if this entity can attack at range
+        let adventurers = self.world.read_storage::<Adventurer>();
+        if let Some(adventurer) = adventurers.get(entity) {
+            if adventurer.adventurer_type.can_attack_at_range() {
+                // Get entity position and set cursor there
+                let positions = self.world.read_storage::<Position>();
+                if let Some(pos) = positions.get(entity) {
+                    self.targeting_mode = true;
+                    self.cursor_position = Some(*pos);
+                    return Ok(false);
+                }
+            }
+        }
+        Ok(false)
+    }
+
+    /// Handle input while in targeting mode
+    fn handle_targeting_input(&mut self, key: KeyEvent, attacker: Entity) -> Result<bool> {
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                if let Some(cursor) = &mut self.cursor_position {
+                    cursor.y -= 1;
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if let Some(cursor) = &mut self.cursor_position {
+                    cursor.y += 1;
+                }
+            }
+            KeyCode::Left | KeyCode::Char('h') => {
+                if let Some(cursor) = &mut self.cursor_position {
+                    cursor.x -= 1;
+                }
+            }
+            KeyCode::Right | KeyCode::Char('l') => {
+                if let Some(cursor) = &mut self.cursor_position {
+                    cursor.x += 1;
+                }
+            }
+            KeyCode::Enter => {
+                // Try to attack target at cursor
+                if let Some(cursor_pos) = self.cursor_position {
+                    self.try_ranged_attack(attacker, cursor_pos)?;
+                }
+                self.targeting_mode = false;
+                self.cursor_position = None;
+            }
+            KeyCode::Esc => {
+                // Cancel targeting
+                self.targeting_mode = false;
+                self.cursor_position = None;
+            }
+            _ => {}
+        }
+        Ok(false)
+    }
+
+    /// Attempt a ranged attack on a target at the given position
+    fn try_ranged_attack(&mut self, attacker: Entity, target_pos: Position) -> Result<()> {
+        // Find target entity at cursor position
+        let target_entity = {
+            let entities = self.world.entities();
+            let positions = self.world.read_storage::<Position>();
+            let enemies = self.world.read_storage::<Enemy>();
+
+            (&entities, &positions, &enemies)
+                .join()
+                .find(|(_, pos, _)| **pos == target_pos)
+                .map(|(entity, _, _)| entity)
+        };
+
+        if let Some(target) = target_entity {
+            // Get attacker info
+            let (attacker_pos, adventurer_type, can_attack) = {
+                let positions = self.world.read_storage::<Position>();
+                let adventurers = self.world.read_storage::<Adventurer>();
+                let action_points = self.world.read_storage::<ActionPoints>();
+
+                if let (Some(pos), Some(adv), Some(ap)) = (
+                    positions.get(attacker),
+                    adventurers.get(attacker),
+                    action_points.get(attacker),
+                ) {
+                    (*pos, adv.adventurer_type, ap.can_spend(2))
+                } else {
+                    return Ok(());
+                }
+            };
+
+            if !can_attack {
+                return Ok(());
+            }
+
+            // Check if target is in range
+            let distance = attacker_pos.distance_to(&target_pos);
+            if let Some((min_range, max_range)) = adventurer_type.ranged_attack_range() {
+                if distance >= min_range && distance <= max_range {
+                    // Perform ranged attack
+                    let damage = {
+                        let stats = self.world.read_storage::<Stats>();
+                        stats.get(attacker).map(|s| s.damage).unwrap_or(0)
+                    };
+
+                    {
+                        let mut stats = self.world.write_storage::<Stats>();
+                        let mut action_points = self.world.write_storage::<ActionPoints>();
+
+                        if let (Some(target_stats), Some(ap)) = (
+                            stats.get_mut(target),
+                            action_points.get_mut(attacker),
+                        ) {
+                            target_stats.take_damage(damage);
+                            ap.spend(2);
+                        }
+                    }
+
+                    self.check_game_over();
+                    self.update_current_actor();
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 

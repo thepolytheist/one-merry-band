@@ -157,8 +157,10 @@ fn run_game<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>) -> Result<
 
                 // Render game
                 let current_actor = game.current_actor;
+                let targeting_mode = game.targeting_mode;
+                let cursor_pos = game.cursor_position;
                 terminal.draw(|f| {
-                    ui::render_game(f, &game.world, current_actor);
+                    ui::render_game(f, &game.world, current_actor, targeting_mode, cursor_pos);
                 })?;
 
                 // Handle input
@@ -170,7 +172,7 @@ fn run_game<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>) -> Result<
             }
             GameState::GameOver => {
                 terminal.draw(|f| {
-                    ui::render_game(f, &game.world, None);
+                    ui::render_game(f, &game.world, None, false, None);
                 })?;
 
                 // Wait for input to exit
@@ -184,7 +186,7 @@ fn run_game<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>) -> Result<
             }
             GameState::Victory => {
                 terminal.draw(|f| {
-                    ui::render_game(f, &game.world, None);
+                    ui::render_game(f, &game.world, None, false, None);
                 })?;
 
                 // Wait for input to exit

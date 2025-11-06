@@ -97,6 +97,51 @@ impl ActionPoints {
     }
 }
 
+/// Tracks remaining movement points for the current action
+/// When an entity spends 1 AP to move, they get movement points equal to their speed
+#[derive(Component, Debug, Clone)]
+#[storage(VecStorage)]
+pub struct RemainingMovement {
+    pub points: i32,
+}
+
+impl RemainingMovement {
+    pub fn new() -> Self {
+        Self { points: 0 }
+    }
+
+    /// Grant movement points based on speed
+    pub fn grant(&mut self, speed: i32) {
+        self.points = speed;
+    }
+
+    /// Spend movement points, returns true if successful
+    pub fn spend(&mut self, amount: i32) -> bool {
+        if self.points >= amount {
+            self.points -= amount;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Check if enough movement points are available
+    pub fn can_spend(&self, amount: i32) -> bool {
+        self.points >= amount
+    }
+
+    /// Clear remaining movement points
+    pub fn clear(&mut self) {
+        self.points = 0;
+    }
+}
+
+impl Default for RemainingMovement {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Types of adventurers available to the player
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AdventurerType {
@@ -136,6 +181,21 @@ impl AdventurerType {
             AdventurerType::Wizard => (10, 10, 15),
             AdventurerType::Scout => (8, 8, 5),
         }
+    }
+
+    /// Get ranged attack capability: (min_range, max_range) or None if melee only
+    pub fn ranged_attack_range(&self) -> Option<(i32, i32)> {
+        match self {
+            AdventurerType::Fighter => None,
+            AdventurerType::Archer => Some((5, 15)),
+            AdventurerType::Wizard => Some((5, 15)),
+            AdventurerType::Scout => None,
+        }
+    }
+
+    /// Check if this adventurer can attack at range
+    pub fn can_attack_at_range(&self) -> bool {
+        self.ranged_attack_range().is_some()
     }
 }
 

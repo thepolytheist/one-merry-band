@@ -79,18 +79,35 @@ pub struct MovementSystem;
 
 impl MovementSystem {
     /// Process a single movement action
+    /// With speed-based movement: 1 AP grants `speed` movement points, each tile costs 1 movement point
     pub fn process_movement(
         entity: Entity,
         dx: i32,
         dy: i32,
         positions: &mut WriteStorage<Position>,
         action_points: &mut WriteStorage<ActionPoints>,
-        _stats: &ReadStorage<Stats>,
+        stats: &ReadStorage<Stats>,
+        movement: &mut WriteStorage<RemainingMovement>,
         world: &World,
     ) -> bool {
-        // Check if entity has enough action points
-        if let Some(ap) = action_points.get_mut(entity) {
-            if !ap.can_spend(1) {
+        // Check if we need to spend an AP to get movement points
+        if let (Some(mv), Some(ap), Some(entity_stats)) = (
+            movement.get_mut(entity),
+            action_points.get_mut(entity),
+            stats.get(entity)
+        ) {
+            // If no movement points remaining, try to spend 1 AP to get more
+            if mv.points == 0 {
+                if ap.can_spend(1) {
+                    ap.spend(1);
+                    mv.grant(entity_stats.speed);
+                } else {
+                    return false; // No AP to spend
+                }
+            }
+
+            // Check if we have movement points to spend
+            if !mv.can_spend(1) {
                 return false;
             }
 
@@ -106,7 +123,6 @@ impl MovementSystem {
                     }
 
                     // Check if another entity is already at this position
-                    // We need to use join() instead of get_mut to avoid double-borrow
                     use specs::Join;
                     let occupied = (&*positions)
                         .join()
@@ -117,13 +133,13 @@ impl MovementSystem {
                     }
                 }
 
-                // Now move the entity - get mutable access
+                // Now move the entity
                 if let Some(pos_mut) = positions.get_mut(entity) {
                     pos_mut.x = new_x;
                     pos_mut.y = new_y;
 
-                    // Spend action point
-                    ap.spend(1);
+                    // Spend movement point
+                    mv.spend(1);
                     return true;
                 }
             }
@@ -138,12 +154,14 @@ pub struct CombatSystem;
 
 impl CombatSystem {
     /// Process a single attack action
+    /// Wizards deal half damage in melee range
     pub fn process_attack(
         attacker: Entity,
         target: Entity,
         stats: &mut WriteStorage<Stats>,
         action_points: &mut WriteStorage<ActionPoints>,
         positions: &ReadStorage<Position>,
+        adventurers: &ReadStorage<Adventurer>,
     ) -> bool {
         // Check if attacker has enough action points (attacking costs 2 AP)
         if let Some(attacker_ap) = action_points.get_mut(attacker) {
@@ -162,7 +180,14 @@ impl CombatSystem {
 
                 // Get attacker damage
                 if let Some(attacker_stats) = stats.get(attacker) {
-                    let damage = attacker_stats.damage;
+                    let mut damage = attacker_stats.damage;
+
+                    // Check if attacker is a wizard (half damage in melee)
+                    if let Some(adventurer) = adventurers.get(attacker) {
+                        if adventurer.adventurer_type == AdventurerType::Wizard {
+                            damage = damage / 2;
+                        }
+                    }
 
                     // Apply damage to target
                     if let Some(target_stats) = stats.get_mut(target) {
