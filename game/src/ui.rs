@@ -37,16 +37,50 @@ fn render_level(f: &mut Frame, area: Rect, world: &World, current_actor: Option<
     let level = world.fetch::<Level>();
     let positions = world.read_storage::<Position>();
     let renderables = world.read_storage::<Renderable>();
+    let adventurers = world.read_storage::<Adventurer>();
+    let enemies = world.read_storage::<Enemy>();
     let entities = world.entities();
 
-    // Create a 2D grid to render with styling info: (char, is_active_entity, is_cursor)
-    let mut grid: Vec<Vec<(char, bool, bool)>> = vec![vec![(' ', false, false); level.width as usize]; level.height as usize];
+    // Get range info for current actor if they can attack at range
+    let (actor_pos, range_info) = if let Some(actor) = current_actor {
+        if let (Some(pos), Some(adventurer)) = (positions.get(actor), adventurers.get(actor)) {
+            (*pos, adventurer.adventurer_type.ranged_attack_range())
+        } else {
+            (Position::new(0, 0), None)
+        }
+    } else {
+        (Position::new(0, 0), None)
+    };
+
+    // Create a 2D grid to render with styling info: (char, is_active_entity, is_cursor, is_in_range)
+    let mut grid: Vec<Vec<(char, bool, bool, bool)>> = vec![vec![(' ', false, false, false); level.width as usize]; level.height as usize];
 
     // First, render the level tiles
     for y in 0..level.height {
         for x in 0..level.width {
             if let Some(tile) = level.get_tile(x, y) {
-                grid[y as usize][x as usize] = (tile.display_char(), false, false);
+                grid[y as usize][x as usize] = (tile.display_char(), false, false, false);
+            }
+        }
+    }
+
+    // Mark tiles that are in attack range (only enemies)
+    if let Some((min_range, max_range)) = range_info {
+        for y in 0..level.height {
+            for x in 0..level.width {
+                let pos = Position::new(x, y);
+                let distance = actor_pos.distance_to(&pos);
+                if distance >= min_range && distance <= max_range {
+                    // Check if there's an enemy at this position
+                    let has_enemy = (&entities, &positions, &enemies)
+                        .join()
+                        .any(|(_, enemy_pos, _)| *enemy_pos == pos);
+
+                    if has_enemy {
+                        let (ch, is_active, is_cursor, _) = grid[y as usize][x as usize];
+                        grid[y as usize][x as usize] = (ch, is_active, is_cursor, true);
+                    }
+                }
             }
         }
     }
@@ -55,7 +89,8 @@ fn render_level(f: &mut Frame, area: Rect, world: &World, current_actor: Option<
     for (entity, pos, renderable) in (&entities, &positions, &renderables).join() {
         if level.is_in_bounds(pos.x, pos.y) {
             let is_active = current_actor.map(|e| e == entity).unwrap_or(false);
-            grid[pos.y as usize][pos.x as usize] = (renderable.glyph, is_active, false);
+            let (_, _, is_cursor, is_in_range) = grid[pos.y as usize][pos.x as usize];
+            grid[pos.y as usize][pos.x as usize] = (renderable.glyph, is_active, is_cursor, is_in_range);
         }
     }
 
@@ -63,8 +98,8 @@ fn render_level(f: &mut Frame, area: Rect, world: &World, current_actor: Option<
     if targeting_mode {
         if let Some(cursor) = cursor_pos {
             if level.is_in_bounds(cursor.x, cursor.y) {
-                let (ch, is_active, _) = grid[cursor.y as usize][cursor.x as usize];
-                grid[cursor.y as usize][cursor.x as usize] = (ch, is_active, true);
+                let (ch, is_active, _, is_in_range) = grid[cursor.y as usize][cursor.x as usize];
+                grid[cursor.y as usize][cursor.x as usize] = (ch, is_active, true, is_in_range);
             }
         }
     }
@@ -73,11 +108,14 @@ fn render_level(f: &mut Frame, area: Rect, world: &World, current_actor: Option<
     let mut lines: Vec<Line> = Vec::new();
     for row in grid {
         let mut spans: Vec<Span> = Vec::new();
-        for (ch, is_active, is_cursor) in row {
+        for (ch, is_active, is_cursor, is_in_range) in row {
             let style = if is_cursor {
                 Style::default().fg(Color::Red).add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
             } else if is_active {
                 Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD | Modifier::REVERSED)
+            } else if is_in_range {
+                // Highlight targetable enemies in green
+                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
             };
