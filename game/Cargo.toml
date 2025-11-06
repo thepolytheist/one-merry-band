@@ -1,0 +1,11 @@
+[package]
+name = "one_merry_band"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ratatui = "0.28"
+crossterm = "0.28"
+specs = { version = "0.20", features = ["specs-derive"] }
+rand = "0.8"
+anyhow = "1.0"
