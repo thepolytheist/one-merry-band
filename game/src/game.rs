@@ -407,10 +407,13 @@ impl Game {
 }
 
 /// Poll for keyboard input with a timeout
+/// This function filters out non-keyboard events (like mouse scroll)
 pub fn poll_input(timeout: Duration) -> Result<Option<KeyEvent>> {
     if event::poll(timeout)? {
-        if let Event::Key(key) = event::read()? {
-            return Ok(Some(key));
+        match event::read()? {
+            Event::Key(key) => return Ok(Some(key)),
+            // Consume and discard non-keyboard events (mouse, resize, etc.)
+            _ => return Ok(None),
         }
     }
     Ok(None)

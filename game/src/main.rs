@@ -136,14 +136,18 @@ fn run_game<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>) -> Result<
 
                 // Handle input
                 if event::poll(Duration::from_millis(100))? {
-                    if let Event::Key(key) = event::read()? {
-                        if key.code == KeyCode::Char('q') {
-                            return Ok(());
-                        }
+                    match event::read()? {
+                        Event::Key(key) => {
+                            if key.code == KeyCode::Char('q') {
+                                return Ok(());
+                            }
 
-                        if let Some(adventurers) = party_selection.handle_input(key) {
-                            game.start_game(adventurers);
+                            if let Some(adventurers) = party_selection.handle_input(key) {
+                                game.start_game(adventurers);
+                            }
                         }
+                        // Ignore non-keyboard events (mouse, resize, etc.)
+                        _ => {}
                     }
                 }
             }
@@ -152,8 +156,9 @@ fn run_game<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>) -> Result<
                 game.process_ai_turns();
 
                 // Render game
+                let current_actor = game.current_actor;
                 terminal.draw(|f| {
-                    ui::render_game(f, &game.world);
+                    ui::render_game(f, &game.world, current_actor);
                 })?;
 
                 // Handle input
@@ -165,25 +170,29 @@ fn run_game<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>) -> Result<
             }
             GameState::GameOver => {
                 terminal.draw(|f| {
-                    ui::render_game(f, &game.world);
+                    ui::render_game(f, &game.world, None);
                 })?;
 
                 // Wait for input to exit
                 if event::poll(Duration::from_millis(100))? {
-                    if let Event::Key(_) = event::read()? {
-                        return Ok(());
+                    match event::read()? {
+                        Event::Key(_) => return Ok(()),
+                        // Ignore non-keyboard events
+                        _ => {}
                     }
                 }
             }
             GameState::Victory => {
                 terminal.draw(|f| {
-                    ui::render_game(f, &game.world);
+                    ui::render_game(f, &game.world, None);
                 })?;
 
                 // Wait for input to exit
                 if event::poll(Duration::from_millis(100))? {
-                    if let Event::Key(_) = event::read()? {
-                        return Ok(());
+                    match event::read()? {
+                        Event::Key(_) => return Ok(()),
+                        // Ignore non-keyboard events
+                        _ => {}
                     }
                 }
             }

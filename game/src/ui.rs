@@ -10,56 +10,68 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, Paragraph},
     Frame,
 };
-use specs::{Join, World, WorldExt};
+use specs::{Entity, Join, World, WorldExt};
 
 use crate::components::*;
 use crate::level::Level;
 
 /// Render the main game screen
-pub fn render_game(f: &mut Frame, world: &World) {
+pub fn render_game(f: &mut Frame, world: &World, current_actor: Option<Entity>) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Percentage(75), // Game area
-            Constraint::Percentage(25), // Status area
+            Constraint::Percentage(65), // Game area
+            Constraint::Percentage(30), // Status area
+            Constraint::Length(3),      // Controls area
         ])
         .split(f.area());
 
-    render_level(f, chunks[0], world);
-    render_status(f, chunks[1], world);
+    render_level(f, chunks[0], world, current_actor);
+    render_status(f, chunks[1], world, current_actor);
+    render_controls(f, chunks[2]);
 }
 
 /// Render the game level
-fn render_level(f: &mut Frame, area: Rect, world: &World) {
+fn render_level(f: &mut Frame, area: Rect, world: &World, current_actor: Option<Entity>) {
     // Get the level from the world
     let level = world.fetch::<Level>();
     let positions = world.read_storage::<Position>();
     let renderables = world.read_storage::<Renderable>();
+    let entities = world.entities();
 
-    // Create a 2D grid to render
-    let mut grid: Vec<Vec<char>> = vec![vec![' '; level.width as usize]; level.height as usize];
+    // Create a 2D grid to render with styling info
+    let mut grid: Vec<Vec<(char, bool)>> = vec![vec![(' ', false); level.width as usize]; level.height as usize];
 
     // First, render the level tiles
     for y in 0..level.height {
         for x in 0..level.width {
             if let Some(tile) = level.get_tile(x, y) {
-                grid[y as usize][x as usize] = tile.display_char();
+                grid[y as usize][x as usize] = (tile.display_char(), false);
             }
         }
     }
 
     // Then, render entities on top
-    for (pos, renderable) in (&positions, &renderables).join() {
+    for (entity, pos, renderable) in (&entities, &positions, &renderables).join() {
         if level.is_in_bounds(pos.x, pos.y) {
-            grid[pos.y as usize][pos.x as usize] = renderable.glyph;
+            let is_active = current_actor.map(|e| e == entity).unwrap_or(false);
+            grid[pos.y as usize][pos.x as usize] = (renderable.glyph, is_active);
         }
     }
 
-    // Convert grid to text
+    // Convert grid to text with styling
     let mut lines: Vec<Line> = Vec::new();
     for row in grid {
-        let line: String = row.into_iter().collect();
-        lines.push(Line::from(line));
+        let mut spans: Vec<Span> = Vec::new();
+        for (ch, is_active) in row {
+            let style = if is_active {
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD | Modifier::REVERSED)
+            } else {
+                Style::default()
+            };
+            spans.push(Span::styled(ch.to_string(), style));
+        }
+        lines.push(Line::from(spans));
     }
 
     let paragraph = Paragraph::new(lines)
@@ -69,7 +81,8 @@ fn render_level(f: &mut Frame, area: Rect, world: &World) {
 }
 
 /// Render the status area showing adventurer information
-fn render_status(f: &mut Frame, area: Rect, world: &World) {
+fn render_status(f: &mut Frame, area: Rect, world: &World, current_actor: Option<Entity>) {
+    let entities = world.entities();
     let positions = world.read_storage::<Position>();
     let stats = world.read_storage::<Stats>();
     let action_points = world.read_storage::<ActionPoints>();
@@ -84,10 +97,14 @@ fn render_status(f: &mut Frame, area: Rect, world: &World) {
         Style::default().add_modifier(Modifier::BOLD),
     ))));
 
-    for (pos, stats_comp, ap, adventurer) in (&positions, &stats, &action_points, &adventurers).join() {
+    for (entity, pos, stats_comp, ap, adventurer) in (&entities, &positions, &stats, &action_points, &adventurers).join() {
         let adventurer_char = adventurer.adventurer_type.display_char();
+        let is_active = current_actor.map(|e| e == entity).unwrap_or(false);
+        let turn_indicator = if is_active { "►" } else { " " };
+
         let status_text = format!(
-            "{} HP:{}/{} AP:{}/{} Spd:{} Dmg:{} Pos:({},{})",
+            "{} {} HP:{}/{} AP:{}/{} Spd:{} Dmg:{} Pos:({},{})",
+            turn_indicator,
             adventurer_char,
             stats_comp.health,
             stats_comp.max_health,
@@ -107,9 +124,14 @@ fn render_status(f: &mut Frame, area: Rect, world: &World) {
             Color::Green
         };
 
+        let mut style = Style::default().fg(color);
+        if is_active {
+            style = style.add_modifier(Modifier::BOLD | Modifier::REVERSED);
+        }
+
         items.push(ListItem::new(Line::from(Span::styled(
             status_text,
-            Style::default().fg(color),
+            style,
         ))));
     }
 
@@ -121,11 +143,15 @@ fn render_status(f: &mut Frame, area: Rect, world: &World) {
             Style::default().add_modifier(Modifier::BOLD),
         ))));
 
-        for (pos, stats_comp, ap, enemy) in (&positions, &stats, &action_points, &enemies).join() {
+        for (entity, pos, stats_comp, ap, enemy) in (&entities, &positions, &stats, &action_points, &enemies).join() {
             let enemy_char = enemy.enemy_type.display_char();
             let enemy_name = enemy.enemy_type.name();
+            let is_active = current_actor.map(|e| e == entity).unwrap_or(false);
+            let turn_indicator = if is_active { "►" } else { " " };
+
             let status_text = format!(
-                "{} {} HP:{}/{} AP:{}/{} Pos:({},{})",
+                "{} {} {} HP:{}/{} AP:{}/{} Pos:({},{})",
+                turn_indicator,
                 enemy_char,
                 enemy_name,
                 stats_comp.health,
@@ -136,9 +162,14 @@ fn render_status(f: &mut Frame, area: Rect, world: &World) {
                 pos.y,
             );
 
+            let mut style = Style::default().fg(Color::Red);
+            if is_active {
+                style = style.add_modifier(Modifier::BOLD | Modifier::REVERSED);
+            }
+
             items.push(ListItem::new(Line::from(Span::styled(
                 status_text,
-                Style::default().fg(Color::Red),
+                style,
             ))));
         }
     }
@@ -147,6 +178,14 @@ fn render_status(f: &mut Frame, area: Rect, world: &World) {
         .block(Block::default().borders(Borders::ALL).title("Status"));
 
     f.render_widget(list, area);
+}
+
+/// Render the controls area
+fn render_controls(f: &mut Frame, area: Rect) {
+    let controls = Paragraph::new("Controls: Arrow Keys/hjkl=Move/Attack | Space=Pass Turn | Q=Quit")
+        .style(Style::default().fg(Color::Cyan))
+        .block(Block::default().borders(Borders::ALL));
+    f.render_widget(controls, area);
 }
 
 /// Render the party selection screen
@@ -161,7 +200,7 @@ pub fn render_party_selection(
         .constraints([
             Constraint::Length(3),
             Constraint::Min(10),
-            Constraint::Length(5),
+            Constraint::Length(7),
         ])
         .split(f.area());
 
@@ -212,11 +251,23 @@ pub fn render_party_selection(
     f.render_widget(list, chunks[1]);
 
     // Instructions
+    let has_adventurers = !selected_adventurers.is_empty();
+    let confirm_style = if has_adventurers {
+        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+
     let instructions = Paragraph::new(vec![
         Line::from("Arrow Keys: Navigate"),
         Line::from("Space/Enter: Add adventurer"),
         Line::from("Backspace: Remove last adventurer"),
-        Line::from("C: Confirm and start game"),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Press ", Style::default()),
+            Span::styled("C", confirm_style),
+            Span::styled(" to Confirm and Start Game", confirm_style),
+        ]),
     ])
     .block(Block::default().borders(Borders::ALL).title("Controls"));
     f.render_widget(instructions, chunks[2]);
