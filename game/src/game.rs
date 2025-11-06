@@ -237,6 +237,7 @@ impl Game {
 
                     if attack_successful {
                         // Attack successful
+                        self.remove_dead_entities();
                         self.check_game_over();
                         self.update_current_actor();
                     }
@@ -398,7 +399,26 @@ impl Game {
             }
         }
 
+        self.remove_dead_entities();
         self.check_game_over();
+    }
+
+    /// Remove dead entities from the world
+    fn remove_dead_entities(&mut self) {
+        let entities = self.world.entities();
+        let stats = self.world.read_storage::<Stats>();
+
+        // Collect dead entities
+        let dead: Vec<Entity> = (&entities, &stats)
+            .join()
+            .filter(|(_, s)| !s.is_alive())
+            .map(|(e, _)| e)
+            .collect();
+
+        // Delete dead entities
+        for entity in dead {
+            let _ = entities.delete(entity);
+        }
     }
 
     /// Check if the game is over (all players or all enemies dead)
@@ -560,6 +580,7 @@ impl Game {
                         }
                     }
 
+                    self.remove_dead_entities();
                     self.check_game_over();
                     self.update_current_actor();
                 }
